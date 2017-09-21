@@ -1,8 +1,5 @@
+# requires only numpy
 import numpy as np
-import scipy as sp
-import matplotlib.pyplot as plt
-import pickle
-import sys
 
 class SDEBE(object):
     ''' Numerically solve an n-dimensional stochastic system of the form:
@@ -48,12 +45,16 @@ class SDEBE(object):
                 Saves a figure `fname' with labels `labels' to the current
                 directory, a scatterplot of each state variable
                 '''
-    def __init__(self, f, g, jac):
+    def __init__(self, f=None, g=None, jac=None):
+        ''' Initialize system with f, g, and jacobian functions '''
+        if not f or not g or not jac:
+            raise TypeError('SDEBE requires f, g, and jacobian functions')
         self.f = f
         self.g = g
         self.jac = jac
 
-    def integrate(self, t0, y0, dt, tmax=None, periods=None, maxiter=10):
+    def integrate(self, t0, y0, dt, tmax=None, periods=None, maxiter=12):
+        ''' Iterate using Newton's method and initial conditions '''
         self.dt = dt
         if tmax:
             periods = int(tmax / dt)
@@ -70,6 +71,7 @@ class SDEBE(object):
         # for progress update
         niters = 0
         every = 10000
+        print '0.00%'
         for i, tn in enumerate(self.ts):
             if every:
                 every -= 1
@@ -77,10 +79,12 @@ class SDEBE(object):
                 every = 10000
                 print '%s%%' % str(round(float(niters) / periods * 100,2))
 
-            ynp1_approx = self.newton_approx(yn, tn, maxiter)
-            drift = self.f(ynp1_approx, tn) * dt
-            diffusion = np.dot(self.g(yn, tn), np.random.normal(scale=np.sqrt(dt), size=5))
-            ynp1 = yn + drift + diffusion
+            ynp1_approx, fn = self.newton_approx(yn, tn, maxiter)
+            drift = fn * dt
+            diffusion = np.dot(self.g(yn, tn),
+                               np.random.normal(scale=np.sqrt(dt),
+                                                size=len(y0)))
+            ynp1 = yn + drift# + diffusion
             self.ys[:, i] = ynp1
             self.ts[i] = tn
             yn = ynp1
@@ -90,46 +94,59 @@ class SDEBE(object):
         print '100%'
 
     def newton_approx(self, y, t, iterations):
-        fn = self.f(y, t)
-        #g = self.g(y, t)
         Df = self.jac(y, t)
+        Dfinv = np.linalg.inv(Df)
         while iterations:
             try:
-                y_new = y - np.dot(np.linalg.inv(Df), fn)
-                diff = np.linalg.norm(y_new - y)
-                if diff < 1e-4:
-                    return y
+                fn = self.f(y, t)
+                y_new = y - np.dot(Dfinv, fn)
+                if np.linalg.norm(y_new - y) < 1e-11:
+                    return y, fn
+                else:
+                    y = y_new
+
             except np.linalg.linalg.LinAlgError:
                 print iterations
                 raise TypeError
             iterations -= 1
 
-        return y
+        print 'Iterations --> 0'
+        return y, fn
 
-    def plot(self, labels, fname):
+    def plot(self, labels, fname, save=False):
+        import matplotlib.pyplot as plt
         if len(labels) != len(self.ys):
             raise ValueError('Must have as many labels as variables')
         colors = ['b', 'g', 'r', 'c', 'm', 'y', 'k']
         for i in range(len(labels)):
             print 'Plotting %s...' % labels[i]
-            plt.scatter(self.ts, self.ys[i, :], s=5, color=colors[i])
+            plt.plot(self.ts, self.ys[i, :], color=colors[i])
 
         plt.legend(labels)
-        plt.show()
-        plt.savefig(fname)
-        print 'Figure saved to "%s".' % fname
+        if save:
+            plt.savefig(fname, dpi=200)
+            print 'Figure saved to "%s".' % fname
+        else:
+            plt.show()
 
 if __name__ == '__main__':
+    print 'functions.py file being used'
     from functions import *
+    # print out a breakdown of how long each method takes to run
     profile = True
-    save_data = False
-    save_plots = True
-    periods = 7.3e4
+    # save output variable to a json
+    save_data = True
+    # save plots
+    save_plots = False
+
+    periods = 7.3e7
+    time_step = 2e-6
+
     if not profile:
         print 'Initializing system...'
         sde = SDEBE(f, G, jac)
         print 'Integrating...'
-        sde.integrate(0, np.zeros(5), 0.0001, periods=periods)
+        sde.integrate(0, np.zeros(5), time_step, periods=periods)
         print 'Generating plots...'
     else:
         import cProfile, pstats, StringIO
@@ -148,9 +165,8 @@ if __name__ == '__main__':
         ps.print_stats()
         print s.getvalue()
 
-    if save_plots:
-        labels = ['x', 'y', 'v', 'T', 'S']
-        sde.plot(labels, 'stochastic.png')
+    labels = ['x', 'y', 'v', 'T', 'S']
+    sde.plot(labels, 'stochastic.png', save=save_plots)
 
     if save_data:
         print 'Saving data...'
